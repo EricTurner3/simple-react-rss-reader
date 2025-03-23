@@ -1,469 +1,21 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Card, CardHeader, CardContent, CardTitle, CardDescription } from '@/components/ui/card';
+
 import { Badge } from '@/components/ui/badge';
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert"
-import { AlertCircle, PlusCircle, Rss, Trash2, Loader2, List, Folder, FolderOpen, ArrowUp, ArrowDown, FolderSync , X } from 'lucide-react';
-import { cn } from '@/lib/utils';
+import { AlertCircle, PlusCircle, Rss, Loader2, List } from 'lucide-react';
+import { parseXML, extractItems } from '@/lib/utils';
 import { motion, AnimatePresence } from 'framer-motion';
-import { xml2json } from 'xml-js';
+
+import { Feed, Folder } from '@/lib/types';
+
+import FeedList from '@/components/feed/FeedList';
+import SortableFeedItem from './components/sortable/SortableFeedItem';
+import SortableFolderItem from './components/sortable/SortableFolderItem';
 
 import './App.css'
 
-// --- Utility function for XML parsing ---
-const parseXML = async (xml: string): Promise<any> => {
-    try {
-        return xml2json(xml, { compact: true, spaces: 4 }); // Call xml2js directly
-    } catch (error) {
-        console.error("Failed to parse XML:", error);
-        throw new Error("Failed to parse XML. Please check your feed URL.");
-    }
-};
-
-// --- Helper Components ---
-
-// Displays a single feed item
-const FeedItem = ({ item, isRead, onRead }: { item: any, isRead: boolean, onRead: (link: string) => void }) => {
-    const title = item.title?._cdata || item.title?.text || "Untitled";
-    const link = item.link?._cdata || item.link?.text || item.link;
-    const description = item.description?._cdata || item.description?.text || "No description available.";
-    const pubDate = item.pubDate ? new Date(item.pubDate._text || item.pubDate).toLocaleString() : 'Unknown date';
-
-    return (
-        <motion.div
-            initial={{ opacity: 0, y: -10 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: 10 }}
-            transition={{ duration: 0.2 }}
-        >
-            <Card
-                className={cn(
-                    "mb-4 hover:shadow-lg transition-shadow cursor-pointer",
-                    isRead ? "bg-gray-50 dark:bg-gray-800/50" : "bg-white dark:bg-gray-800"
-                )}
-                onClick={() => {
-                    if (!isRead) {
-                        onRead(link);
-                    }
-                    window.open(link, '_blank');
-                }}
-            >
-                <CardHeader>
-                    <CardTitle>
-                        <a
-                            href={link}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className={cn(
-                                "hover:underline",
-                                isRead ? "text-gray-500 dark:text-gray-400" : "text-blue-500 hover:text-blue-600 dark:text-blue-400 dark:hover:text-blue-300"
-                            )}
-                        >
-                            {title}
-                        </a>
-                    </CardTitle>
-                    <CardDescription className={isRead ? "text-gray-400" : "text-gray-100"}>{pubDate}</CardDescription>
-                </CardHeader>
-                <CardContent>
-                    <p className={cn(
-                        "text-gray-700 dark:text-gray-300",
-                        isRead && "text-gray-500 dark:text-gray-400"
-                    )}
-                        dangerouslySetInnerHTML={{ __html: description }}
-                    />
-                </CardContent>
-            </Card>
-        </motion.div>
-    );
-};
-
-// Displays a list of feed items
-const FeedList = ({ items, readItems, onRead }: { items: any[], readItems: Set<string>, onRead: (link: string) => void }) => {
-    if (!items || items.length === 0) {
-        return <p className="text-gray-500">No items to display.</p>;
-    }
-    return (
-        <AnimatePresence>
-            {items.map((item, index) => {
-                const link = item.link?._cdata || item.link?.text || item.link;
-                const isRead = readItems.has(link);
-                return (
-                    <FeedItem
-                        key={index}
-                        item={item}
-                        isRead={isRead}
-                        onRead={onRead}
-                    />
-                )
-            })}
-        </AnimatePresence>
-    );
-};
-
-interface Feed {
-    id: string;
-    url: string;
-    name: string;
-    folderId?: string;
-    index: number;
-}
-
-interface Folder {
-    id: string;
-    name: string;
-    index: number;
-}
-
-// --- Sortable Components ---
-
-const SortableFeedItem = ({
-    feed,
-    onRemove,
-    onSelect,
-    unreadCount,
-    parentId,
-    onMoveUp,
-    onMoveDown,
-    onMoveToFolder,
-    folders
-}: {
-    feed: Feed,
-    onRemove: (id: string) => void,
-    onSelect: (id: string) => void,
-    unreadCount: number,
-    parentId: string | null,
-    onMoveUp: (id: string) => void,
-    onMoveDown: (id: string) => void,
-    onMoveToFolder: (id: string, folderId: string | undefined) => void,
-    folders: Folder[]
-}) => {
-
-    const [isMoving, setIsMoving] = useState(false);
-    const currentFolder = folders.find(f => f.id === parentId);
-
-    return (
-        <div
-            className={cn(
-                "flex items-center justify-between p-2 rounded-md cursor-pointer transition-colors",
-                "bg-white dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300 mb-1",
-                "border border-transparent hover:border-gray-200 dark:hover:border-gray-700",
-                "shadow-sm"
-            )}
-            onClick={() => onSelect(feed.id)}
-        >
-            <div className="flex items-center gap-2 truncate">
-                <span className="truncate">{feed.name}</span>
-            </div>
-            <div className="flex items-center gap-2">
-                {unreadCount > 0 && (
-                    <Badge
-                        variant="secondary"
-                        className="bg-blue-500 text-white border-none"
-                    >
-                        {unreadCount}
-                    </Badge>
-                )}
-                <Button
-                    variant="ghost"
-                    size="icon"
-                    onClick={(e) => {
-                        e.stopPropagation();
-                        onMoveUp(feed.id);
-                    }}
-                    className="h-4 w-4 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300 cursor-pointer"
-                    title="Move Up"
-                    aria-label="Move Up"
-                    disabled={feed.index === 0}
-                >
-                    <ArrowUp className="h-4 w-4" />
-                </Button>
-                <Button
-                    variant="ghost"
-                    size="icon"
-                    onClick={(e) => {
-                        e.stopPropagation();
-                        onMoveDown(feed.id);
-                    }}
-                    className="h-4 w-4 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300 cursor-pointer"
-                    title="Move Down"
-                    aria-label="Move Down"
-                >
-                    <ArrowDown className="h-4 w-4" />
-                </Button>
-                <Button
-                    variant="ghost"
-                    size="icon"
-                    onClick={(e) => {
-                        e.stopPropagation();
-                        setIsMoving(!isMoving)
-                    }}
-                    className="h-4 w-4 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300 cursor-pointer"
-                    title="Move to Folder"
-                    aria-label="Move to Folder"
-                >
-                    <FolderSync  className="h-4 w-4" />
-                </Button>
-                <Button
-                    variant="ghost"
-                    size="icon"
-                    onClick={(e) => {
-                        e.stopPropagation();
-                        onRemove(feed.id);
-                    }}
-                    className="h-4 w-4 text-blue-500 hover:text-blue-700 dark:text-blue-300 dark:hover:text-blue-100 cursor-pointer"
-                >
-                    <Trash2 className="h-4 w-4" />
-                    <span className="sr-only">Remove Feed</span>
-                </Button>
-            </div>
-            <AnimatePresence>
-                {isMoving && (
-                    <>
-                     {/* Backdrop */}
-                    <div className="fixed inset-0 bg-black opacity-50 z-0" />
-                    <motion.div
-                        initial={{ opacity: 0, height: 0 }}
-                        animate={{ opacity: 1, height: 'auto' }}
-                        exit={{ opacity: 0, height: 0 }}
-                        transition={{ duration: 0.2 }}
-                        className="absolute left-75 top-half mt-2 w-48 bg-white dark:bg-gray-700 border rounded-md shadow-lg z-10"
-                    >
-                        <div className="p-2 space-y-1">
-                            <div className="flex items-center justify-between">
-                                <div className="text-sm text-gray-700 dark:text-gray-300">Move to Folder:</div>
-                                <Button
-                                    variant="ghost"
-                                    size="icon"
-                                    onClick={(e) => {
-                                        setIsMoving(false);
-                                    }}
-                                    className="h-4 w-4 text-blue-500 hover:text-blue-700 dark:text-blue-300 dark:hover:text-blue-100 cursor-pointer ml-2" // Added margin-left for spacing
-                                >
-                                    <X className="h-4 w-4" />
-                                    <span className="sr-only">Cancel</span>
-                                </Button>
-                            </div>
-
-                            <select
-                                className="w-full p-2 border rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
-                                onChange={(e) => {
-                                    const folderId = e.target.value === 'null' ? undefined : e.target.value;
-                                    onMoveToFolder(feed.id, folderId);
-                                    setIsMoving(false);
-                                }}
-                                value={parentId ?? 'null'}
-                            >
-                                {/*<option value="null">Uncategorized</option>*/} {/* Uncomment to allow moving to uncategorized */}
-                                {folders.map((folder) => (
-                                    <option key={folder.id} value={folder.id}>
-                                        {folder.name}
-                                    </option>
-                                ))}
-                            </select>
-                            <div className="text-xs text-gray-500 dark:text-gray-400">
-                                Current Folder: {currentFolder ? currentFolder.name : 'Uncategorized'}
-                            </div>
-                        </div>
-                    </motion.div>
-                    </>
-                )}
-            </AnimatePresence>
-        </div>
-    );
-};
-
-const SortableFolderItem = ({
-    folder,
-    feeds,
-    onRemoveFolder,
-    onRemoveFeed,
-    onSelectFeed,
-    onAddToFolder,
-    expandedFolders,
-    onToggleFolder,
-    unreadCounts,
-    onMoveUp,
-    onMoveDown,
-    folders
-}: {
-    folder: Folder;
-    feeds: Feed[];
-    onRemoveFolder: (id: string) => void;
-    onRemoveFeed: (id: string) => void;
-    onSelectFeed: (id: string) => void;
-    onAddToFolder: (feedId: string, folderId: string) => void;
-    expandedFolders: string[];
-    onToggleFolder: (id: string) => void;
-    unreadCounts: { [key: string]: number };
-    onMoveUp: (id: string) => void;
-    onMoveDown: (id: string) => void;
-    folders: Folder[];
-}) => {
-    const [isAddingToFolder, setIsAddingToFolder] = useState(false);
-    const [selectedFeedToAdd, setSelectedFeedToAdd] = useState<string | null>(null);
-
-    const folderFeeds = feeds.filter(feed => feed.folderId === folder.id);
-    const folderUnreadCount = folderFeeds.reduce((acc, feed) => {
-        return acc + (unreadCounts[feed.id] || 0);
-    }, 0);
-
-    return (
-        <div className="space-y-2">
-            <div className="w-full flex items-center justify-between p-2 rounded-md bg-white dark:bg-gray-800 shadow-sm border border-transparent hover:border-gray-200 dark:hover:border-gray-700">
-
-                <Button
-                    variant="ghost"
-                    className=" flex items-center justify-between px-0  text-gray-700 dark:text-gray-300 cursor-pointer"
-                    onClick={() => onToggleFolder(folder.id)}
-                >
-                    <div className="flex items-center gap-2 w-full justify-start truncate">
-                        {expandedFolders.includes(folder.id) ? (
-                            <FolderOpen className="w-4 h-4 text-gray-100" />
-                        ) : (
-                            <Folder className="w-4 h-4 text-gray-400" />
-                        )}
-                        <span className={expandedFolders.includes(folder.id) ? "truncate text-gray-100": "truncate text-gray-400"}>{folder.name}</span>
-                    </div>
-                </Button>
-                {folderUnreadCount > 0 && (
-                        <Badge
-                            variant="secondary"
-                            className="bg-blue-500 text-white border-none"
-                        >
-                            {folderUnreadCount}
-                        </Badge>
-                    )}
-                <div className='flex gap-1.5'>
-                    <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={(e) => {
-                            e.stopPropagation();
-                            onMoveUp(folder.id);
-                        }}
-                        className="h-4 w-4 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300 cursor-pointer"
-                        title="Move Folder Up"
-                        aria-label="Move Folder Up"
-                        disabled={folder.index === 0}
-                    >
-                        <ArrowUp className="h-4 w-4" />
-                    </Button>
-                    <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={(e) => {
-                            e.stopPropagation();
-                            onMoveDown(folder.id);
-                        }}
-                        className="h-4 w-4 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300 cursor-pointer"
-                        title="Move Folder Down"
-                        aria-label="Move Folder Down"
-                    >
-                        <ArrowDown className="h-4 w-4" />
-                    </Button>
-                    <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={(e) => {
-                            e.stopPropagation();
-                            onRemoveFolder(folder.id)
-                        }}
-                        className="h-4 w-4 text-blue-500 hover:text-blue-700 dark:text-blue-300 dark:hover:text-blue-100 cursor-pointer"
-                    >
-                        <Trash2 className="h-4 w-4" />
-                        <span className="sr-only">Remove Folder</span>
-                    </Button>
-                </div>
-            </div>
-            <AnimatePresence>
-                {expandedFolders.includes(folder.id) && (
-                    <motion.div
-                        initial={{ opacity: 0, height: 0 }}
-                        animate={{ opacity: 1, height: 'auto' }}
-                        exit={{ opacity: 0, height: 0 }}
-                        transition={{ duration: 0.2 }}
-                        className="space-y-1 ml-4"
-                    >
-                        {folderFeeds.map((feed) => {
-                            const unreadCount = unreadCounts[feed.id] || 0;
-                            const feedId = feed.id;
-                            return (
-                                <SortableFeedItem
-                                    key={feedId}
-                                    feed={feed}
-                                    onRemove={onRemoveFeed}
-                                    onSelect={(id) => onSelectFeed(id)}
-                                    unreadCount={unreadCount}
-                                    parentId={folder.id} // Pass folder ID as parentId
-                                    onMoveUp={(id) => onMoveUp(id)}
-                                    onMoveDown={(id) => onMoveDown(id)}
-                                    onMoveToFolder={(feedId, id) => onAddToFolder(feedId, id)} // Pass the id and folderId
-                                    folders={folders}
-                                />
-                            );
-                        })}
-                        {/* Add to Folder Dropdown */}
-                        {/*
-                        <div className="mt-2">
-                            <Button
-                                variant="outline"
-                                size="sm"
-                                className="w-full"
-                                onClick={() => setIsAddingToFolder(!isAddingToFolder)}
-                            >
-                                {isAddingToFolder ?
-                                    'Cancel' : 'Add Feed to Folder'}
-                            </Button>
-                            <AnimatePresence>
-                                {isAddingToFolder && (
-                                    <motion.div
-                                        initial={{ opacity: 0, height: 0 }}
-                                        animate={{ opacity: 1, height: 'auto' }}
-                                        exit={{ opacity: 0, height: 0 }}
-                                        transition={{ duration: 0.2 }}
-                                        className="mt-2"
-                                    >
-                                        <select
-                                            value={selectedFeedToAdd || ''}
-                                            onChange={(e) => setSelectedFeedToAdd(e.target.value)}
-                                            className="w-full p-2 border rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
-                                        >
-                                            <option value="">Select a feed...</option>
-                                            {feeds
-                                                .filter(feed => !feed.folderId) // Show only feeds not in a folder
-                                                .map(feed => (
-                                                    <option key={feed.id} value={feed.id}>
-                                                        {feed.name}
-                                                    </option>
-                                                ))}
-                                        </select>
-                                        <Button
-                                            variant="default"
-                                            size="sm"
-                                            className="w-full mt-2"
-                                            onClick={() => {
-                                                if (selectedFeedToAdd) {
-                                                    onAddToFolder(selectedFeedToAdd, folder.id);
-                                                    setIsAddingToFolder(false);
-                                                    setSelectedFeedToAdd(null);
-                                                }
-                                            }}
-                                            disabled={!selectedFeedToAdd}
-                                        >
-                                            Add
-                                        </Button>
-                                    </motion.div>
-                                )}
-                            </AnimatePresence>
-                        </div>
-                        */}
-                    </motion.div>
-                )}
-            </AnimatePresence>
-        </div>
-    );
-};
 
 // --- Main App Component ---
 const RssReaderApp = () => {
@@ -515,18 +67,7 @@ const RssReaderApp = () => {
     });
 
     // --- Helper Functions ---
-    const extractItems = (parsedData: any) => {
-        parsedData = JSON.parse(parsedData);
-        let items = [];
-        if (parsedData.rss) {
-            items = parsedData.rss.channel.item;
-        } else if (parsedData.feed?.entry) {
-            items = parsedData.feed.entry;
-        } else {
-            throw new Error("Invalid RSS/Atom feed format: No items found.");
-        }
-        return items;
-    };
+    
 
     const fetchFeed = useCallback(async (feed: Feed) => {
         setLoading(prev => ({ ...prev, [feed.id]: true }));
@@ -534,7 +75,7 @@ const RssReaderApp = () => {
         setFeedData(prev => ({ ...prev, [feed.id]: null }));
 
         try {
-            let response = await fetch(feed.url);
+            const response = await fetch(feed.link);
 
             if (!response.ok) {
                 throw new Error(`HTTP error! Status: ${response.status}`);
@@ -546,8 +87,8 @@ const RssReaderApp = () => {
             setFeedData(prev => ({ ...prev, [feed.id]: items }));
 
             // Calculate unread count
-            const newUnreadCount = items.filter((item: any) => {
-                const link = item.link?._cdata || item.link?.text || item.link;
+            const newUnreadCount = items.filter((item: Feed) => {
+                const link = item.link;
                 return !readItems.has(link);
             }).length;
             setUnreadCounts(prevCounts => ({
@@ -560,7 +101,7 @@ const RssReaderApp = () => {
             if (err.message.includes('CORS') || err.message.includes('Failed to fetch')) {
                 console.log("CORS error detected or fetch failed, trying with proxy...");
                 try {
-                    const response = await fetch("/api/" + feed.url);
+                    const response = await fetch("/api/" + feed.link);
                     if (!response.ok) {
                         throw new Error(`Proxy fetch error! Status: ${response.status}`);
                     }
@@ -569,8 +110,8 @@ const RssReaderApp = () => {
                     const items = extractItems(parsedData);
                     setFeedData(prev => ({ ...prev, [feed.id]: items }));
                      // Calculate unread count
-                    const newUnreadCount = items.filter((item: any) => {
-                        const link = item.link?._cdata || item.link?.text || item.link;
+                    const newUnreadCount = items.filter((item: Feed) => {
+                        const link = item.link;
                         return !readItems.has(link);
                     }).length;
                     setUnreadCounts(prevCounts => ({
@@ -605,7 +146,7 @@ const RssReaderApp = () => {
         if (currentFeedUrl.trim()) {
             const newFeed: Feed = {
                 id: crypto.randomUUID(),
-                url: currentFeedUrl.trim(),
+                link: currentFeedUrl.trim(),
                 name: currentFeedName.trim() || `Feed ${feeds.length + 1}`,
                 folderId: undefined, // Initialize folderId
                 index: feeds.filter(f => f.folderId === undefined).length,
@@ -771,8 +312,8 @@ let updatedFeeds: Feed[] = feeds;
                     if (feed) {
                          // Refetch feed data to get accurate item list
                         const items = feedData[feedId] || [];
-                        const newUnreadCount = items.filter((item: any) => {
-                            const itemLink = item.link?._cdata || item.link?.text || item.link;
+                        const newUnreadCount = items.filter((item: Feed) => {
+                            const itemLink = item.link;
                             return !newReadItems.has(itemLink);
                         }).length;
                         updatedCounts[feedId] = newUnreadCount;
@@ -849,7 +390,7 @@ let updatedFeeds: Feed[] = feeds;
             );
         });
 
-        let updatedFeeds = feeds.map(feed => {
+        const updatedFeeds = feeds.map(feed => {
             const movedFeed = currentFeeds.find(f => f.id === feed.id);
             return movedFeed ? { ...movedFeed } : feed;
         });
@@ -857,7 +398,7 @@ let updatedFeeds: Feed[] = feeds;
         setFeeds([...updatedFeeds]);
     };
 
-    const onMoveFeedToFolder = (id: string, folderId: string | undefined) => {
+    const onMoveFeedToFolder = (id: string, folderId: string) => {
         const feedToMove = feeds.find(f => f.id === id);
         if (!feedToMove) return;
 
